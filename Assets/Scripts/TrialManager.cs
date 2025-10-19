@@ -1,4 +1,3 @@
-// Assets/Scripts/TrialManager.cs
 using System;
 using System.Collections.Generic;
 using System.IO;
@@ -25,12 +24,16 @@ public class TrialManager : MonoBehaviour
     public float rayLength = 5f;
     public LayerMask tileLayer; // set mask to "Tile"
 
+    [Header("Spawn / Start")]
+    // Spawn OUTSIDE the grid so the user must step onto (0,0)
+    public Vector2 preStartWorldXZ = new Vector2(-0.5f, -0.5f);
+
     // runtime
     Tile _currentTile;
     Tile _prevTile;
     bool _trialRunning = false;
     bool _hasStarted = false;
-    float _startGrace = 0.25f;
+    float _startGrace = 0.25f; // prevent instant finish if already on goal at start
 
     float _trialStartTime;
     float _totalTime;
@@ -55,14 +58,14 @@ public class TrialManager : MonoBehaviour
 
         _xrOriginComp = xrOrigin.GetComponent<XROrigin>();
 
-        // Build first grid & path
+        // First grid & path
         _seedUsed = UnityEngine.Random.Range(int.MinValue, int.MaxValue);
         grid.BuildGridAndPath(_seedUsed);
 
-        // Place player at start
-        TeleportPlayerToStart();
+        // Place player at the pre-start location (-0.5, -0.5)
+        TeleportPlayerToPrestart();
 
-        // Ensure canvases start disabled
+        // UI defaults
         popupCanvas.enabled = false;
         redOverlayCanvas.enabled = false;
 
@@ -78,6 +81,7 @@ public class TrialManager : MonoBehaviour
 
     void UpdateTileUnderPlayer()
     {
+        // Downward ray from the HMD
         Ray r = new Ray(xrCamera.position, Vector3.down);
         if (Physics.Raycast(r, out var hit, rayLength, tileLayer))
         {
@@ -89,20 +93,20 @@ public class TrialManager : MonoBehaviour
             _currentTile = null;
         }
 
-        // START: when leaving the start tile
-        if (!_trialRunning)
+        // START: when ENTERING Start tile (0,0) for the first time
+        if (!_trialRunning && !_hasStarted)
         {
-            if (_prevTile != null && _prevTile.IsStart && _currentTile != null && !_currentTile.IsStart)
+            if (_currentTile != null && _currentTile.IsStart && (_prevTile == null || !_prevTile.IsStart))
             {
                 _trialRunning = true;
                 _trialStartTime = Time.time;
                 _hasStarted = true;
             }
         }
-        else // running
+        else if (_trialRunning)
         {
-            // STOP: on goal tile, but only after a short grace time
-            if (_hasStarted && _currentTile != null && _currentTile.IsGoal && (Time.time - _trialStartTime) > _startGrace)
+            // STOP: on Goal tile (with small grace)
+            if (_currentTile != null && _currentTile.IsGoal && (Time.time - _trialStartTime) > _startGrace)
             {
                 _totalTime = Time.time - _trialStartTime;
                 _trialRunning = false;
@@ -110,7 +114,7 @@ public class TrialManager : MonoBehaviour
             }
         }
 
-        // DAMAGE & ERRORS visual/logic
+        // DAMAGE & error counting (count once per wrong tile)
         bool onWrongTile = _currentTile != null && !_currentTile.IsPath && !_currentTile.IsStart && !_currentTile.IsGoal;
         if (onWrongTile)
         {
@@ -133,6 +137,7 @@ public class TrialManager : MonoBehaviour
         {
             var gp = _currentTile.GridPos;
             _heatmap[gp.x, gp.y] += dt;
+
             if (!_currentTile.IsPath && !_currentTile.IsStart && !_currentTile.IsGoal)
                 _damageTime += dt;
         }
@@ -154,11 +159,13 @@ public class TrialManager : MonoBehaviour
             $"Damage: {_damageTime:0.00}s\n" +
             $"Errors: {_wrongTilesVisited.Count}\n" +
             $"Seed: {_seedUsed}";
+
         popupSaveNextBtn.onClick.RemoveAllListeners();
         popupSaveNextBtn.onClick.AddListener(() =>
         {
-            SaveCsv();       // writes CSV + heatmap + path mask + annotated
-            NextTrial();     // rebuild + teleport to start
+            try { SaveCsv(); }
+            catch (Exception e) { Debug.LogError($"[TrialManager] SaveCsv failed: {e.Message}"); }
+            finally { NextTrial(); }
         });
     }
 
@@ -182,21 +189,22 @@ public class TrialManager : MonoBehaviour
 
         grid.BuildGridAndPath(_seedUsed);
 
-        TeleportPlayerToStart();             // flash back to beginning
-        StartCoroutine(FlashOverlay(0.12f)); // optional quick flash
+        TeleportPlayerToPrestart();            // back to (-0.5, -0.5)
+        StartCoroutine(FlashOverlay(0.12f));   // optional visual flash
 
         ResetMetrics();
     }
 
-    void TeleportPlayerToStart()
+    void TeleportPlayerToPrestart()
     {
-        Vector3 startWorld = grid.GridToWorld(config.start);
-        Vector3 targetCamPos = new Vector3(startWorld.x, xrCamera.position.y, startWorld.z);
+        Vector3 targetCamPos = new Vector3(
+            grid.GridOriginWorld.x + preStartWorldXZ.x,
+            xrCamera.position.y,
+            grid.GridOriginWorld.z + preStartWorldXZ.y);
 
-        if (_xrOriginComp != null)
-            _xrOriginComp.MoveCameraToWorldLocation(targetCamPos); // XR-friendly snap
-        else
-            xrOrigin.position = new Vector3(startWorld.x, xrOrigin.position.y, startWorld.z);
+        var xro = _xrOriginComp;
+        if (xro != null) xro.MoveCameraToWorldLocation(targetCamPos);
+        else xrOrigin.position = new Vector3(targetCamPos.x, xrOrigin.position.y, targetCamPos.z);
     }
 
     System.Collections.IEnumerator FlashOverlay(float seconds = 0.12f)
@@ -206,7 +214,29 @@ public class TrialManager : MonoBehaviour
         redOverlayCanvas.enabled = false;
     }
 
-    // ---- CSV & Heatmaps -----------------------------------------------------
+    // ---------- CSV & Heatmaps ----------------------------------------------
+
+    StreamWriter OpenWriter(string path, bool append)
+    {
+        var dir = Path.GetDirectoryName(path);
+        if (!string.IsNullOrEmpty(dir) && !Directory.Exists(dir))
+            Directory.CreateDirectory(dir);
+
+        FileMode mode = append ? FileMode.OpenOrCreate : FileMode.Create;
+        var fs = new FileStream(path, mode, FileAccess.Write, FileShare.ReadWrite);
+        if (append) fs.Seek(0, SeekOrigin.End);
+        return new StreamWriter(fs);
+    }
+
+    string BuildDistractorMixString()
+    {
+        if (grid.DistractorFamilyCounts == null || grid.DistractorFamilyCounts.Count == 0) return "";
+        var keys = new List<string>(grid.DistractorFamilyCounts.Keys);
+        keys.Sort();
+        var parts = new List<string>();
+        foreach (var k in keys) parts.Add($"{k}:{grid.DistractorFamilyCounts[k]}");
+        return string.Join("|", parts);
+    }
 
     void SaveCsv()
     {
@@ -218,14 +248,10 @@ public class TrialManager : MonoBehaviour
         string scene = _sceneName;
         string trial = _trialIndex.ToString();
 
-        // Your requested names:
-        string varNormalName   = GetVarNormalName();
-        string fixedNormalName = GetFixedNormalName();
-
-        // Keep PathLevel for back-compat (set = variable normal name)
-        string pathLevel = !string.IsNullOrEmpty(varNormalName)
-            ? varNormalName
-            : (config.pathVariable != null ? config.pathVariable.name : "");
+        // Keep legacy columns compatible
+        string pathFamily = grid.PathFamily != null ? grid.PathFamily.familyName : "";
+        string pathLevel = pathFamily;            // as before, PathLevel was "variable normal name"
+        string fixedNormalName = "Mixed1024";     // we now mix 1024 distractors across the board
 
         string total = _totalTime.ToString("0.000");
         string damage = _damageTime.ToString("0.000");
@@ -233,15 +259,26 @@ public class TrialManager : MonoBehaviour
         string tilesVisited = CountTilesVisited().ToString();
         string seed = _seedUsed.ToString();
 
-        using var sw = new StreamWriter(path, append: true);
-        if (writeHeader)
-        {
-            sw.WriteLine("ParticipantID,DateTime,SceneName,Trial,PathLevel,VarNormalName,FixedNormalName,TotalTime,DamageTime,ErrorCount,TilesVisited,Seed");
-        }
-        sw.WriteLine($"{participant},{dt},{scene},{trial},{pathLevel},{varNormalName},{fixedNormalName},{total},{damage},{errors},{tilesVisited},{seed}");
-        sw.Flush();
+        // New summary columns
+        string levelMode  = config.levelMode.ToString();
+        int lvlMin = (config.levelMode == ExperimentConfig.LevelMode.Specific) ? config.specificLevel : config.levelMin;
+        int lvlMax = (config.levelMode == ExperimentConfig.LevelMode.Specific) ? config.specificLevel : config.levelMax;
+        int usedMin = grid.PathLevelMinUsed;
+        int usedMax = grid.PathLevelMaxUsed;
+        string distractorMix = BuildDistractorMixString();
 
-        WriteHeatmapFiles(); // writes heatmap + pathmask + annotated + pathcoords
+        using (var sw = OpenWriter(path, append: true))
+        {
+            if (writeHeader)
+            {
+                sw.WriteLine("ParticipantID,DateTime,SceneName,Trial,PathLevel,VarNormalName,FixedNormalName,TotalTime,DamageTime,ErrorCount,TilesVisited,Seed,PathFamily,LevelMode,LevelMin,LevelMax,UsedMin,UsedMax,DistractorMix");
+            }
+
+            sw.WriteLine($"{participant},{dt},{scene},{trial},{pathLevel},{pathFamily},{fixedNormalName},{total},{damage},{errors},{tilesVisited},{seed},{pathFamily},{levelMode},{lvlMin},{lvlMax},{usedMin},{usedMax},{distractorMix}");
+            sw.Flush();
+        }
+
+        WriteHeatmapFiles();
     }
 
     void WriteHeatmapFiles()
@@ -252,9 +289,9 @@ public class TrialManager : MonoBehaviour
         int gz = grid.config.gridSizeZ;
         string baseName = $"{_sceneName}_trial{_trialIndex}";
 
-        // 1) Plain heatmap
+        // heatmap
         string heatPath = Path.Combine(_logDir, $"{baseName}_heatmap.csv");
-        using (var hw = new StreamWriter(heatPath, append: false))
+        using (var hw = OpenWriter(heatPath, append: false))
         {
             hw.Write("x/z");
             for (int z = 0; z < gz; z++) hw.Write($",z{z}");
@@ -268,9 +305,9 @@ public class TrialManager : MonoBehaviour
             }
         }
 
-        // 2) Path mask (1 on path, 0 elsewhere)
+        // path mask
         string maskPath = Path.Combine(_logDir, $"{baseName}_pathmask.csv");
-        using (var mw = new StreamWriter(maskPath, append: false))
+        using (var mw = OpenWriter(maskPath, append: false))
         {
             mw.Write("x/z");
             for (int z = 0; z < gz; z++) mw.Write($",z{z}");
@@ -288,9 +325,9 @@ public class TrialManager : MonoBehaviour
             }
         }
 
-        // 3) Annotated heatmap (e.g., 0.532* for tiles on true path)
+        // annotated heatmap
         string annPath = Path.Combine(_logDir, $"{baseName}_heatmap_annotated.csv");
-        using (var aw = new StreamWriter(annPath, append: false))
+        using (var aw = OpenWriter(annPath, append: false))
         {
             aw.Write("x/z");
             for (int z = 0; z < gz; z++) aw.Write($",z{z}");
@@ -309,9 +346,9 @@ public class TrialManager : MonoBehaviour
             }
         }
 
-        // 4) Exact path coordinates (for reproducibility / analysis)
+        // exact path coords
         string coordsPath = Path.Combine(_logDir, $"{baseName}_pathcoords.csv");
-        using (var cw = new StreamWriter(coordsPath, append: false))
+        using (var cw = OpenWriter(coordsPath, append: false))
         {
             cw.WriteLine("Index,X,Z");
             int idx = 0;
@@ -323,20 +360,7 @@ public class TrialManager : MonoBehaviour
         }
     }
 
-    // ---- Helpers ------------------------------------------------------------
-
-    string GetVarNormalName()   => GetNormalMapNameFromMat(config.pathVariable);
-    string GetFixedNormalName() => GetNormalMapNameFromMat(config.distractorFixed);
-
-    string GetNormalMapNameFromMat(Material mat)
-    {
-        if (mat == null) return "";
-        Texture t = null;
-        if (mat.HasProperty("_BumpMap")) t = mat.GetTexture("_BumpMap");           // URP Lit normal slot
-        if (t == null && mat.HasProperty("_NormalMap")) t = mat.GetTexture("_NormalMap");
-        if (t == null && mat.HasProperty("_DetailNormalMap")) t = mat.GetTexture("_DetailNormalMap");
-        return t != null ? t.name : "";
-    }
+    // ---------- Helpers ------------------------------------------------------
 
     int CountTilesVisited()
     {

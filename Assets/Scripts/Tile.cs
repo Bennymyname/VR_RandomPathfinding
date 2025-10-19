@@ -1,26 +1,27 @@
 using UnityEngine;
 
-[RequireComponent(typeof(MeshCollider), typeof(MeshRenderer))]
+[RequireComponent(typeof(MeshRenderer), typeof(MeshCollider))]
 public class Tile : MonoBehaviour
 {
     public Vector2Int GridPos { get; private set; }
-    public bool IsPath { get; private set; }
+    public bool IsPath  { get; private set; }
     public bool IsStart { get; private set; }
     public bool IsGoal  { get; private set; }
 
+    // Assigned runtime (for debugging/logging)
+    public string AssignedFamily;   // e.g., "Bricks004"
+    public int    AssignedLevelPx;  // 0 => fixed 1024; otherwise 4..1024
+
     MeshRenderer _mr;
 
-    public void Init(Vector2Int gridPos, bool isPath, bool isStart, bool isGoal,
-                     Material distractorMat, Material pathMat)
+    public void Init(Vector2Int gp, bool isPath, bool isStart, bool isGoal)
     {
-        GridPos = gridPos;
-        IsPath = isPath;
+        GridPos = gp;
+        IsPath  = isPath;
         IsStart = isStart;
         IsGoal  = isGoal;
-
-        if (_mr == null) _mr = GetComponent<MeshRenderer>();
-        _mr.sharedMaterial = IsPath ? pathMat : distractorMat;
-
-        gameObject.layer = LayerMask.NameToLayer("Tile");
+        _mr = GetComponent<MeshRenderer>();
     }
+
+    public MeshRenderer Renderer => _mr ??= GetComponent<MeshRenderer>();
 }

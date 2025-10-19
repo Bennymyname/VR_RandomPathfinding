@@ -19,9 +19,19 @@ MonoBehaviour:
   start: {x: 0, y: 0}
   goal: {x: 9, y: 9}
   monotonicRightUp: 1
-  distractorFixed: {fileID: 2100000, guid: 2e1a9261de317e6409274c695faa192a, type: 2}
-  pathVariable: {fileID: 2100000, guid: da3599916f78c9d4394be7bc082dc611, type: 2}
+  basePathMat: {fileID: 2100000, guid: da3599916f78c9d4394be7bc082dc611, type: 2}
+  baseDistractorMat: {fileID: 2100000, guid: 2e1a9261de317e6409274c695faa192a, type: 2}
+  families:
+  - {fileID: 11400000, guid: fe11157829d4fa545982f22c7be104c6, type: 2}
+  - {fileID: 11400000, guid: 734f2ff8eafbac4439be13f8af6f4643, type: 2}
+  - {fileID: 11400000, guid: 090108ec1e0d7fc49b444a1caae51445, type: 2}
+  pathFamilyMode: 1
+  chosenFamilyIndex: 0
+  levelMode: 0
+  specificLevel: 280
+  levelMin: 648
+  levelMax: 648
+  levelStep: 4
   sceneName: MainPathNav
   participantId: 
-  writeHeatmap: 1
-  redOverlayCanvas: {fileID: 0}
+  writeHeatmap: 0
