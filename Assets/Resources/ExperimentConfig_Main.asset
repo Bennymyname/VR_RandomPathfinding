@@ -28,7 +28,7 @@ MonoBehaviour:
   pathFamilyMode: 1
   chosenFamilyIndex: 0
   levelMode: 0
-  specificLevel: 280
+  specificLevel: 160
   levelMin: 648
   levelMax: 648
   levelStep: 4
